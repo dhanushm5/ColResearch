@@ -67,11 +67,12 @@ Context:
 Paper: "${paperText.slice(0, 2000)}..."
 Student's Annotation: "${annotation}"
 
-As their mentor, please provide:
+As their AI mentor, please provide:
 1. A brief analysis of their perspective and how it relates to the paper's content
 2. 2-3 specific suggestions for deepening their analysis
 3. Potential research directions they could explore based on their interests
 4. Areas where they could contribute novel insights to the field
+5. Dont use '*' or '#' to format your response.
 
 Keep the tone supportive yet professional, as if you're a senior researcher mentoring a promising junior colleague.`;
     
