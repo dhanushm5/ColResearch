@@ -11,47 +11,30 @@ const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
 export async function summarizePaper(text: string): Promise<string> {
-  if (!text) {
-    throw new Error('No text provided for summarization');
-  }
-
+  const prompt = `Please provide a comprehensive summary of the following research paper. Focus on the main findings, methodology, and conclusions. Give pre formatted text as output. Here's the paper text:\n\n${text}`;
+  
   try {
-    const result = await model.generateContent(text);
+    const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
-  } catch (error: any) {
-    console.error('Error in summarizePaper:', error);
-    throw new Error(error.message || 'Failed to summarize paper');
-  }
-}
-
-export async function detectBias(text: string): Promise<string> {
-  if (!text) {
-    throw new Error('No text provided for bias detection');
-  }
-
-  try {
-    const result = await model.generateContent(text);
-    const response = await result.response;
-    return response.text();
-  } catch (error: any) {
-    console.error('Error in detectBias:', error);
-    throw new Error(error.message || 'Failed to detect bias');
+  } catch (error) {
+    console.error('Error summarizing paper:', error);
+    throw error;
   }
 }
 
 export async function answerQuestion(text: string, question: string): Promise<string> {
-  if (!text || !question) {
-    throw new Error('Missing text or question');
-  }
+  const prompt = `Using the context of the following research paper, please answer this question: "${question}"
+  
+  Paper text:\n\n${text}`;
 
   try {
-    const result = await model.generateContent(`${text}\n\nQuestion: ${question}`);
+    const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
-  } catch (error: any) {
-    console.error('Error in answerQuestion:', error);
-    throw new Error(error.message || 'Failed to answer question');
+  } catch (error) {
+    console.error('Error answering question:', error);
+    throw error;
   }
 }
 

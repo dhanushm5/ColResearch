@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { PaperUploader } from './components/PaperUploader';
-import { PaperList } from './components/PaperList';
-import { Annotations } from './components/Annotations';
-import { supabase } from './lib/supabase';
-import { summarizePaper, detectBias, answerQuestion } from './lib/gemini';
-import { FileText, AlertTriangle, HelpCircle, AlertCircle, BookMarked } from 'lucide-react';
+import { useParams, Navigate } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
+import { PaperUploader } from './PaperUploader';
+import { PaperList } from './PaperList';
+import { Annotations } from './Annotations';
+import { Users, FileText, HelpCircle } from 'lucide-react';
+import { summarizePaper, answerQuestion } from '../lib/gemini';
 
 interface Paper {
   id: string;
@@ -14,38 +15,148 @@ interface Paper {
   full_text: string;
 }
 
-function App() {
+interface Room {
+  id: string;
+  name: string;
+  created_by: string;
+  created_at: string;
+}
+
+export function Room() {
+  const { roomId } = useParams<{ roomId: string }>();
+  const [room, setRoom] = useState<Room | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'summary' | 'bias' | 'qa' | 'annotations'>('summary');
-  const [biasAnalysis, setBiasAnalysis] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<'summary' | 'qa' | 'collaboration'>('summary');
   const [question, setQuestion] = useState<string>('');
   const [answer, setAnswer] = useState<string>('');
   const [analyzing, setAnalyzing] = useState(false);
 
+  const userName = localStorage.getItem('userName');
+  const userColor = localStorage.getItem('userColor');
+
   useEffect(() => {
+    if (!userName || !userColor || !roomId) return;
+
+    fetchRoom();
     fetchPapers();
-  }, []);
+    
+    // Set up real-time subscriptions
+    const papersSubscription = supabase
+      .channel(`papers_${roomId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'papers',
+          filter: `room_id=eq.${roomId}`,
+        },
+        (payload) => {
+          console.log('Papers change received:', payload);
+          fetchPapers();
+          
+          // If the current selected paper was deleted, clear it
+          if (payload.eventType === 'DELETE' && selectedPaper?.id === payload.old.id) {
+            setSelectedPaper(null);
+          }
+          
+          // If the current selected paper was updated, refresh it
+          if (payload.eventType === 'UPDATE' && selectedPaper?.id === payload.new.id) {
+            setSelectedPaper(payload.new);
+          }
+        }
+      )
+      .subscribe();
+
+    const roomSubscription = supabase
+      .channel(`room_${roomId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'rooms',
+          filter: `id=eq.${roomId}`,
+        },
+        (payload) => {
+          console.log('Room change received:', payload);
+          if (payload.eventType === 'DELETE') {
+            setError('This room has been deleted');
+            return;
+          }
+          fetchRoom();
+        }
+      )
+      .subscribe();
+
+    // Set up polling for additional reliability
+    const pollInterval = setInterval(() => {
+      fetchRoom();
+      fetchPapers();
+      if (selectedPaper) {
+        refreshSelectedPaper();
+      }
+    }, 1000);
+
+    return () => {
+      papersSubscription.unsubscribe();
+      roomSubscription.unsubscribe();
+      clearInterval(pollInterval);
+    };
+  }, [roomId, selectedPaper?.id]);
+
+  async function refreshSelectedPaper() {
+    if (!selectedPaper) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('papers')
+        .select('*')
+        .eq('id', selectedPaper.id)
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        setSelectedPaper(data);
+      }
+    } catch (err) {
+      console.error('Error refreshing selected paper:', err);
+    }
+  }
+
+  async function fetchRoom() {
+    try {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', roomId)
+        .single();
+
+      if (error) throw error;
+      setRoom(data);
+    } catch (err: any) {
+      console.error('Error fetching room:', err);
+      setError(err.message);
+    }
+  }
 
   async function fetchPapers() {
     try {
       setLoading(true);
-      setError(null);
       const { data, error } = await supabase
         .from('papers')
         .select('*')
+        .eq('room_id', roomId)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        throw error;
-      }
-
+      if (error) throw error;
       setPapers(data || []);
     } catch (err: any) {
       console.error('Error fetching papers:', err);
-      setError('Failed to load papers. Please try again later.');
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -64,14 +175,13 @@ function App() {
             title: fileName,
             summary,
             full_text: text,
+            room_id: roomId,
           },
         ])
         .select()
         .single();
 
       if (error) throw error;
-
-      setPapers((prev) => [data, ...prev]);
       setSelectedPaper(data);
     } catch (error: any) {
       console.error('Error processing paper:', error);
@@ -83,34 +193,15 @@ function App() {
 
   async function handleDelete(id: string) {
     try {
-      setError(null);
       const { error } = await supabase.from('papers').delete().eq('id', id);
-
       if (error) throw error;
 
-      setPapers((prev) => prev.filter((paper) => paper.id !== id));
       if (selectedPaper?.id === id) {
         setSelectedPaper(null);
       }
     } catch (err: any) {
       console.error('Error deleting paper:', err);
-      setError('Failed to delete paper. Please try again.');
-    }
-  }
-
-  async function handleBiasDetection() {
-    if (!selectedPaper?.full_text) return;
-    
-    setAnalyzing(true);
-    setError(null);
-    try {
-      const analysis = await detectBias(selectedPaper.full_text);
-      setBiasAnalysis(analysis);
-    } catch (err: any) {
-      console.error('Error detecting bias:', err);
-      setError('Failed to analyze bias. Please try again.');
-    } finally {
-      setAnalyzing(false);
+      setError(err.message);
     }
   }
 
@@ -131,19 +222,43 @@ function App() {
     }
   }
 
+  if (!userName || !userColor) {
+    return <Navigate to="/" />;
+  }
+
+  if (!room) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-semibold text-gray-900">Room not found</h2>
+          <p className="mt-2 text-gray-600">This room might have been deleted or never existed.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex items-center space-x-2 mb-8">
-          <FileText className="h-8 w-8 text-blue-500" />
-          <h1 className="text-2xl font-bold text-gray-900">
-            Research Paper Summarizer
-          </h1>
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center space-x-4">
+            <Users className="h-8 w-8 text-blue-500" />
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">{room.name}</h1>
+              <p className="text-sm text-gray-500">Created by {room.created_by}</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ backgroundColor: userColor }}
+            />
+            <span className="text-sm text-gray-600">{userName}</span>
+          </div>
         </div>
 
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start space-x-3">
-            <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
             <p className="text-red-700">{error}</p>
           </div>
         )}
@@ -152,17 +267,11 @@ function App() {
           <div className="space-y-6">
             <PaperUploader onUpload={handleUpload} />
             <div className="h-[1px] bg-gray-200" />
-            {loading && papers.length === 0 ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-              </div>
-            ) : (
-              <PaperList
-                papers={papers}
-                onSelect={setSelectedPaper}
-                onDelete={handleDelete}
-              />
-            )}
+            <PaperList
+              papers={papers}
+              onSelect={setSelectedPaper}
+              onDelete={handleDelete}
+            />
           </div>
 
           <div className="bg-white rounded-lg shadow">
@@ -185,19 +294,6 @@ function App() {
                       Summary
                     </button>
                     <button
-                      onClick={() => {
-                        setActiveTab('bias');
-                        if (!biasAnalysis) handleBiasDetection();
-                      }}
-                      className={`px-4 py-3 font-medium text-sm border-b-2 ${
-                        activeTab === 'bias'
-                          ? 'border-blue-500 text-blue-600'
-                          : 'border-transparent text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      Bias Analysis
-                    </button>
-                    <button
                       onClick={() => setActiveTab('qa')}
                       className={`px-4 py-3 font-medium text-sm border-b-2 ${
                         activeTab === 'qa'
@@ -208,14 +304,14 @@ function App() {
                       Q&A
                     </button>
                     <button
-                      onClick={() => setActiveTab('annotations')}
+                      onClick={() => setActiveTab('collaboration')}
                       className={`px-4 py-3 font-medium text-sm border-b-2 ${
-                        activeTab === 'annotations'
+                        activeTab === 'collaboration'
                           ? 'border-blue-500 text-blue-600'
                           : 'border-transparent text-gray-500 hover:text-gray-700'
                       }`}
                     >
-                      Annotations
+                      Collaboration
                     </button>
                   </nav>
                 </div>
@@ -228,28 +324,6 @@ function App() {
                       <p className="text-gray-600 whitespace-pre-wrap">
                         {selectedPaper.summary}
                       </p>
-                    </div>
-                  )}
-
-                  {activeTab === 'bias' && (
-                    <div className="prose max-w-none">
-                      {analyzing ? (
-                        <div className="flex items-center justify-center py-8">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
-                        </div>
-                      ) : biasAnalysis ? (
-                        <>
-                          <div className="flex items-center gap-2 mb-4">
-                            <AlertTriangle className="h-5 w-5 text-yellow-500" />
-                            <h3 className="text-lg font-medium">Bias Analysis</h3>
-                          </div>
-                          <p className="text-gray-600 whitespace-pre-wrap">
-                            {biasAnalysis}
-                          </p>
-                        </>
-                      ) : (
-                        <p>Analyzing bias...</p>
-                      )}
                     </div>
                   )}
 
@@ -294,10 +368,12 @@ function App() {
                     </div>
                   )}
 
-                  {activeTab === 'annotations' && selectedPaper && (
+                  {activeTab === 'collaboration' && selectedPaper && (
                     <Annotations
                       paperId={selectedPaper.id}
                       paperText={selectedPaper.full_text}
+                      userName={userName}
+                      userColor={userColor}
                     />
                   )}
                 </div>
@@ -305,7 +381,7 @@ function App() {
             ) : (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
                 <FileText className="h-16 w-16 mb-4" />
-                <p>Select a paper to view its analysis</p>
+                <p>Select a paper to start collaborating</p>
               </div>
             )}
           </div>
@@ -314,5 +390,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
