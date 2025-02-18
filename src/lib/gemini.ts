@@ -1,10 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+const apiKey = process.env.VITE_GEMINI_API_KEY;
 
 if (!apiKey) {
   console.error('Missing Gemini API key');
-  throw new Error('Please add your Gemini API key to the .env file');
+  throw new Error('Please add your Gemini API key to the environment variables');
 }
 
 const genAI = new GoogleGenerativeAI(apiKey);
