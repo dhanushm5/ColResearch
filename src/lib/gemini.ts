@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+const modelName = import.meta.env.VITE_GEMINI_MODEL || 'gemini-2.5-flash';
 
 if (!apiKey) {
   console.error('Missing Gemini API key');
@@ -8,7 +9,17 @@ if (!apiKey) {
 }
 
 const genAI = new GoogleGenerativeAI(apiKey);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+const model = genAI.getGenerativeModel({ model: modelName });
+
+function getGeminiErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Gemini request failed';
+
+  if (message.includes('429') || message.toLowerCase().includes('quota exceeded')) {
+    return 'Gemini API quota is unavailable for the current Google AI Studio project. Check that the API key belongs to the intended project, verify the project shows a non-zero rate limit in AI Studio, and enable billing if the free tier is not available for that project or region.';
+  }
+
+  return message;
+}
 
 export async function summarizePaper(text: string): Promise<string> {
   const prompt = `Please provide a comprehensive summary of the following research paper. Focus on the main findings, methodology, and conclusions. Give pre formatted text as output. Here's the paper text:\n\n${text}`;
@@ -17,9 +28,10 @@ export async function summarizePaper(text: string): Promise<string> {
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
-  } catch (error) {
-    console.error('Error summarizing paper:', error);
-    throw error;
+  } catch (error: unknown) {
+    const message = getGeminiErrorMessage(error);
+    console.error('Error summarizing paper:', message);
+    throw new Error(message);
   }
 }
 
@@ -32,9 +44,10 @@ export async function answerQuestion(text: string, question: string): Promise<st
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
-  } catch (error) {
-    console.error('Error answering question:', error);
-    throw error;
+  } catch (error: unknown) {
+    const message = getGeminiErrorMessage(error);
+    console.error('Error answering question:', message);
+    throw new Error(message);
   }
 }
 
@@ -64,7 +77,8 @@ Keep the tone supportive yet professional, as if you're a senior researcher ment
     }
     return result.response.text();
   } catch (error: any) {
-    console.error('Error in getSuggestions:', error);
-    throw new Error(error.message || 'Failed to get suggestions');
+    const message = getGeminiErrorMessage(error);
+    console.error('Error in getSuggestions:', message);
+    throw new Error(message);
   }
 }

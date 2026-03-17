@@ -2,8 +2,6 @@ import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload } from 'lucide-react';
 import { pdfjs } from 'react-pdf';
-import { supabase } from '../lib/supabase';
-import { summarizePaper } from '../lib/gemini';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
@@ -33,30 +31,6 @@ export function PaperUploader({ onUpload }: PaperUploaderProps) {
       }
 
       console.log('PDF text extracted, generating summary...');
-      
-      // Get summary from Gemini API
-      const summary = await summarizePaper(fullText);
-      console.log('Summary generated');
-
-      // Save to Supabase
-      const { data, error } = await supabase
-        .from('papers')
-        .insert([
-          {
-            title: file.name,
-            summary,
-            full_text: fullText,
-          },
-        ])
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Supabase error:', error);
-        throw new Error(error.message);
-      }
-
-      console.log('Paper saved to database:', data);
       await onUpload(fullText, file.name);
     } catch (error: any) {
       console.error('Error processing PDF:', error);
